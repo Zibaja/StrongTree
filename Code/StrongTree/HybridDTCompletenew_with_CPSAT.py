@@ -20,9 +20,33 @@ import math
 from ortools.sat.python import cp_model
 
 
+def _validate_n_threads(n_threads):
+    """Return a valid positive solver thread count."""
+    if (
+        isinstance(n_threads, (bool, np.bool_))
+        or not isinstance(n_threads, (int, np.integer))
+        or n_threads < 1
+    ):
+        raise ValueError("n_threads must be a positive integer.")
+    return int(n_threads)
+
+
+def _add_map_domain(model, variable, literals, offset=0):
+    """Call AddMapDomain across old and new OR-Tools Python APIs."""
+    add_map_domain = getattr(model, "add_map_domain", None)
+    if add_map_domain is None:
+        add_map_domain = getattr(model, "AddMapDomain", None)
+    if add_map_domain is None:
+        raise AttributeError(
+            "This OR-Tools version does not provide add_map_domain or "
+            "AddMapDomain."
+        )
+    return add_map_domain(variable, literals, offset)
+
+
 
 class FlowOCT:
-    def __init__(self, X,y, features, tree, lambdaa, eta, alpha,bb_prediction, time_limit):
+    def __init__(self, X,y, features, tree, lambdaa, eta, alpha,bb_prediction, time_limit, n_threads=1):
         self.X = X #X is datafarme
         self.y = y.astype(str)
         self.datapoints = X.index
@@ -35,6 +59,7 @@ class FlowOCT:
         self.eta = eta
         self.alpha = alpha
         self.black_box_pred = np.asarray(bb_prediction).astype(str) 
+        self.n_threads = _validate_n_threads(n_threads)
         
         # parameters
         self.m = {}
@@ -52,11 +77,7 @@ class FlowOCT:
 
         # Gurobi model
         self.model = gp.Model('FlowOCT')
-        '''
-        To compare all approaches in a fair setting we limit the solver to use only one thread to merely evaluate 
-        the strength of the formulation.
-        '''
-        self.model.params.Threads = 1
+        self.model.params.Threads = self.n_threads
         self.model.params.TimeLimit = time_limit
 
         '''
@@ -291,7 +312,7 @@ class BendersOCT:
     """
 
 
-    def __init__(self,X,y,features,tree,lambdaa,eta,bb_prediction,time_limit):
+    def __init__(self,X,y,features,tree,lambdaa,eta,bb_prediction,time_limit,n_threads=1):
 
         self.X = X
         self.y = y.astype(str)
@@ -309,6 +330,7 @@ class BendersOCT:
         self.eta = float(eta)
         
         self.black_box_pred = np.asarray(bb_prediction).astype(str)
+        self.n_threads = _validate_n_threads(n_threads)
 
         if len(self.black_box_pred) != self.num_datapoints:
             raise ValueError("The number of black-box predictions does not match " "the number of training datapoints.")
@@ -341,7 +363,7 @@ class BendersOCT:
 
         self.model.Params.PreCrush = 1 #comment if you onlu want cuts in integer nodes
         self.model.Params.LazyConstraints = 1
-        self.model.Params.Threads = 1
+        self.model.Params.Threads = self.n_threads
         self.model.Params.TimeLimit = time_limit
 
         # Callback statistics
@@ -1039,6 +1061,7 @@ class BendersOCT:
         )
 
         feasibility_model.Params.OutputFlag = 0
+        feasibility_model.Params.Threads = self.n_threads
 
         z = {
             arc: feasibility_model.addVar(
@@ -1155,7 +1178,7 @@ class BendersOCT:
         )
 
         dual_model.Params.OutputFlag = 0
-        dual_model.Params.Threads = 1
+        dual_model.Params.Threads = self.n_threads
         dual_model.Params.Method = 1
 
         # Make infeasible/unbounded statuses distinguishable.
@@ -1761,6 +1784,7 @@ class CPSATOCT:
         alpha,
         bb_prediction,
         time_limit,
+        n_threads=1,
     ):
         self.X = X
         self.features = list(features)
@@ -1769,6 +1793,7 @@ class CPSATOCT:
         self.eta = 0.0 if eta is None else float(eta)
         self.alpha = 0.0 if alpha is None else float(alpha)
         self.time_limit = None if time_limit is None else float(time_limit)
+        self.n_threads = _validate_n_threads(n_threads)
 
         if not 0.0 <= self.alpha <= 1.0:
             raise ValueError("min_transp must lie in [0, 1].")
@@ -1963,19 +1988,15 @@ class CPSATOCT:
                     literal = self.model.NewBoolVar(
                         f"branch_on[{node},{feature_index}]"
                     )
-                    self.model.Add(
-                        feature == feature_index
-                    ).OnlyEnforceIf(literal)
-                    self.model.Add(
-                        feature != feature_index
-                    ).OnlyEnforceIf(literal.Not())
                     self.branch_on[node, feature_index] = literal
                     feature_literals.append(literal)
 
+                # branch_on[node, f] <=> feature[node] == f.  The remaining
+                # value ``no_feature`` is selected when all literals are
+                # false, while the equality below keeps that condition tied
+                # explicitly to whether the node splits.
+                _add_map_domain(self.model, feature, feature_literals)
                 self.model.Add(sum(feature_literals) == split)
-                self.model.Add(
-                    feature == no_feature
-                ).OnlyEnforceIf(split.Not())
             else:
                 self.model.Add(feature == no_feature)
 
@@ -2003,12 +2024,9 @@ class CPSATOCT:
                     path.append(ancestor)
                 ancestor //= 2
             for feature_index in range(num_features):
-                self.model.Add(
-                    sum(
-                        self.branch_on[path_node, feature_index]
-                        for path_node in path
-                    )
-                    <= 1
+                self.model.AddAtMostOne(
+                    self.branch_on[path_node, feature_index]
+                    for path_node in path
                 )
 
     def _create_routing_variables(self):
@@ -2242,7 +2260,7 @@ class CPSATOCT:
         if not self._created:
             self.create_primal_problem()
 
-        self.solver.parameters.num_search_workers = 1
+        self.solver.parameters.num_search_workers = self.n_threads
         if self.time_limit is not None:
             self.solver.parameters.max_time_in_seconds = self.time_limit
 
@@ -2344,7 +2362,7 @@ class CPSATOCT:
             self.beta[node, "bb"] = float(state == self.BLACK_BOX)
 
 class HybridDT():
-    def __init__(self, black_box_classifier=None,depth = None, lambdaa = None, eta = None,min_transp = None , estimator = 'FlowOCT', verbosity = ['hybrid'], random_state=42, bb_pretrained=False ):
+    def __init__(self, black_box_classifier=None,depth = None, lambdaa = None, eta = None,min_transp = None , estimator = 'FlowOCT', verbosity = ['hybrid'], random_state=42, bb_pretrained=False, n_threads=1 ):
         self.depth = depth
         self.lambdaa = lambdaa
         self.min_transp = min_transp
@@ -2352,6 +2370,7 @@ class HybridDT():
         self.bb_pretrained=bb_pretrained
         self.verbosity = verbosity
         self.estimator = estimator
+        self.n_threads = _validate_n_threads(n_threads)
         self.tree = Tree(depth)
         ## attributes related to the trained model
         self.b = None
@@ -2407,7 +2426,7 @@ class HybridDT():
 
             myestimator = FlowOCT(
                 X, y, features, self.tree, self.lambdaa, self.eta,
-                self.min_transp, bb_prediction, time_limit
+                self.min_transp, bb_prediction, time_limit, self.n_threads
             )
             model_info = myestimator.create_primal_problem().solve()
 
@@ -2422,7 +2441,7 @@ class HybridDT():
 
             myestimator = BendersOCT(
                 X, y, features, self.tree, self.lambdaa, self.eta,
-                bb_prediction, time_limit
+                bb_prediction, time_limit, self.n_threads
             )
             model_info = myestimator.create_master_problem().solve()
 
@@ -2438,7 +2457,7 @@ class HybridDT():
 
             myestimator = CPSATOCT(
                 X, y, features, self.tree, self.lambdaa, self.eta,
-                self.min_transp, bb_prediction, time_limit
+                self.min_transp, bb_prediction, time_limit, self.n_threads
             )
             model_info = myestimator.create_primal_problem().solve()
 
