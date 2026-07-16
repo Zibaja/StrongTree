@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=HybridDT
-#SBATCH --array=0-2
+#SBATCH --job-name=HybridDTBenders
+#SBATCH --array=0-299
 #SBATCH --time=01:30:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=1
@@ -25,6 +25,7 @@ mkdir -p Results
 python -u Run_hybridDT.py \
     --dataset compas \
     --model  HybridDTClassifier_post\
+    --estimator_id 1\
     --local_id $SLURM_ARRAY_TASK_ID
 
 echo "Job finished with exit code $?"

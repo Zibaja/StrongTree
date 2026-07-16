@@ -6,11 +6,12 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from Tree import Tree
 from Hybrid_utils import *
-from HybridDT import FlowOCT, HybridDT
+# from HybridDT import FlowOCT, HybridDT 
+from HybridDTCompletenew import  HybridDT
 import time
 import subprocess
 import pickle
-
+from black_box_models import BlackBox
 
 ESTIMATORS = {
 
@@ -28,23 +29,20 @@ ESTIMATORS = {
         "hparams": {
             "depth":[1,2,3,4,5],
             "lambdaa": [10**-2, 10**-3, 10**-4],
-            "eta" : lambda X,lambdaValue : min([ (1 / X.shape[0]) / 2, lambdaValue / 2]),
+            "eta" : [0.001, 0.00215443, 0.00464159, 0.01, 0.02154435,
+                        0.04641589, 0.1, 0.21544347, 0.46415888, 1.0],
             "min_transp": [0.1,0.2,0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,0.95]
         }
     } }
 
-eta = lambda X,lambdaValue : min([ (1 / X.shape[0]) / 2, lambdaValue / 2])
-    # HybridDT_classifier = HybridDT(black_box_classifier=bbox,depth = 3, lambdaa = 0.001, eta = 0.1,min_transp = 0.7,
-    #                                 estimator = 'FlowOCT', verbosity = ['hybrid'], random_state=42, bb_pretrained=False )
-    
-    # HybridDT_classifier.fit(df_X['train'], y['train'], features, time_limit=time_limit)
+eta_function = lambda X,lambdaValue : min([ (1 / X.shape[0]) / 2, lambdaValue / 2])
 
 n_seeds = 5
 DATASETS = ["compas", "adult", "acs_employ"]
 SEEDS = [1,2,3,4,5]
 
 
-EXPERIMENTS = []
+EXPERIMENTS = {k:[] for k in ['FlowOCT', 'BendersOCT']}
 
 for dataset in DATASETS:
     for seed in SEEDS:
@@ -52,7 +50,7 @@ for dataset in DATASETS:
             for d in ESTIMATORS[model]['hparams']['depth']:
                 for lambdaa_val in ESTIMATORS[model]['hparams']['lambdaa']:
                         for alpha_val in ESTIMATORS[model]['hparams']['min_transp']:
-                            EXPERIMENTS.append({
+                            EXPERIMENTS['FlowOCT'].append({
                                 "dataset_name": dataset,
                                 "model": model,
                                 "depth":d ,
@@ -60,13 +58,24 @@ for dataset in DATASETS:
                                 "min_transp": alpha_val,
                                 "seed": seed
                             })
-# print(len(EXPERIMENTS))
-# print(EXPERIMENTS)
+                        for eta_val in ESTIMATORS[model]['hparams']['eta']:
+                            EXPERIMENTS['BendersOCT'].append({
+                                "dataset_name": dataset,
+                                "model": model,
+                                "depth":d ,
+                                "lambdaa": lambdaa_val,
+                                "eta": eta_val,
+                                "seed": seed
+                            })
+
+
+# print("number of experiments is",len(EXPERIMENTS['BendersOCT']))
+#print(EXPERIMENTS['BendersOCT'])
 
 
 
 
-def run_one_experiment(model, seed,dataset_name, depth, lambdaa,min_transp,estimator='FlowOCT', time_limit=3600):
+def run_one_experiment(model, seed,dataset_name, depth, lambdaa,min_transp=None,eta=None,estimator='FlowOCT', time_limit=3600):
 
     DataDIR = Path.cwd().parent.parent/'DataSets'
  
@@ -91,17 +100,31 @@ def run_one_experiment(model, seed,dataset_name, depth, lambdaa,min_transp,estim
     h_params = {
             "depth":depth,
             "lambdaa": lambdaa,
-            "eta" : eta(X['train'], lambdaa),
+            "eta" : eta_function(X['train'], lambdaa) if estimator=='FlowOCT' else eta,
             "min_transp": min_transp
         }
 
     start_time = time.time()
 
     # Define a hybrid model
-    bbox = RandomForestClassifier(random_state=random_state, min_samples_split=10, max_depth=10)
+    # bbox = RandomForestClassifier(random_state=random_state, min_samples_split=10, max_depth=10)
+
+
+
+    # Retrieve the BB
+    bbox_type = 'random_forest'
+    model_path = Path("models") / f"{dataset_name}_{bbox_type}_{seed}.pickle"
+    if not model_path.exists():
+        ValueError(f"Black box model not found at {model_path}. Please ensure the black box is trained and saved before running this experiment.")
+
+    print("Loading the Black Box")
+
+    bbox = BlackBox(bb_type=bbox_type).load(model_path) # it is an object from out BlackBox class, which has a predict method and a fit method. It is not the sklearn object.
+
+
 
     HybridDT_classifier = HybridDT(black_box_classifier=bbox,**h_params,
-                                    estimator = estimator, verbosity = ['hybrid'], random_state=random_state, bb_pretrained=False )
+                                    estimator = estimator, verbosity = ['hybrid'], random_state=random_state, bb_pretrained=True ) # if you only path the bb object, bb_pretrained= False, so it will be fit inside the fitting of HybridDT
     
     HybridDT_classifier.fit(df_X['train'], y['train'], features, time_limit=time_limit)
 
@@ -125,7 +148,8 @@ def run_one_experiment(model, seed,dataset_name, depth, lambdaa,min_transp,estim
         print(f"test transparency ratio is {transp_ratio['test']}")
         print(f"Number of branch nodes is {np.sum(list(HybridDT_classifier.b.values()))}")
         print(f"Number of leaf nodes is {np.sum(list(HybridDT_classifier.p.values()))}")
-
+        print(f"status: {HybridDT_classifier.status}")
+        HybridDT_classifier.tree_to_string()
         #to draw the tree
         #HybridDT_classifier.plot_tree(filename="my_hybrid_tree.png", show=False)
 
@@ -162,7 +186,8 @@ def send():
         "--exclude '.git'",
         "--exclude 'StrongTree/Results/'", 
         "--exclude 'StrongTree/Plots/'", 
-         "--exclude 'paper/bootstrap_results/'", 
+        "--exclude 'StrongTree/Code/StrongTree/plotsziba/'", 
+         "--exclude 'paper/bootstrap_results/'",  
         f"{LOC_PATH}",
         f"{REM_PATH}"
     ])
@@ -172,8 +197,10 @@ def send():
 
 def receive():
     print("Receiving results from Compute Canada...")
-    src_path = Path(REM_PATH, "Strong_Tree", "StrongTree", "Results","HybridDT", "HybridDTClassifier_post/*")
-    dst_path = Path(LOC_PATH, "StrongTree", "Results", "HybridDT", "HybridDTClassifier_post")
+    src_path = Path(REM_PATH, "Strong_Tree", "StrongTree", "Results","HybridDT","Benders", "HybridDTClassifier_post/*")
+    dst_path = Path(LOC_PATH, "StrongTree", "Results", "HybridDT","Benders", "HybridDTClassifier_post")
+    # src_path = Path(REM_PATH, "Strong_Tree", "StrongTree", "Code","StrongTree", "results/*")
+    # dst_path = Path(LOC_PATH, "StrongTree", "Code", "StrongTree", "results")
 
     cmd_str = f"rsync -av {src_path} {dst_path}"
     
@@ -187,6 +214,7 @@ def main ():
     parser.add_argument('--model', type=str, default=None)
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--local_id', type=int, default=None)
+    parser.add_argument('--estimator_id', type=int, default=None)
     parser.add_argument('--send', action='store_true', help='Sync project to Compute Canada')
     parser.add_argument('--receive', action='store_true', help='Fetch results from Compute Canada')
     
@@ -201,11 +229,11 @@ def main ():
         receive()
         return
 
-    
+    estimators = ['FlowOCT', 'BendersOCT']
 
     filtered_experiments = []
 
-    for cfg in EXPERIMENTS:
+    for cfg in EXPERIMENTS[estimators[args.estimator_id]]:
         if args.dataset is not None and cfg["dataset_name"] != args.dataset:
             continue
         if args.model is not None and cfg["model"] != args.model:
@@ -219,26 +247,40 @@ def main ():
     print("number of experimnets ",len(filtered_experiments))
 
     cfg = filtered_experiments[args.local_id]
-
-
+    estimator = estimators[args.estimator_id]
+    print(f"Solving the problem using {estimator}")
     print(f"Running configuration: {cfg}")
     
-    results = run_one_experiment(**cfg,estimator='FlowOCT', time_limit=3600)
+    results = run_one_experiment(**cfg,estimator=estimator, time_limit=3600)
 
 
     
     # Save results 
     output_dir = Path.cwd().parent.parent/'Results'/'HybridDT'/f"{cfg['model']}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / (
-    f"{cfg['dataset_name']}_"
-    f"seed{cfg['seed']}_"
-    f"depth{cfg['depth']}_"
-    f"lambdaa{cfg['lambdaa']}_"
-    f"min_transp{cfg['min_transp']}.pkl")
+    if estimator=='FlowOCT':
+        output_dir = Path.cwd().parent.parent/'Results'/'HybridDT'/f"{cfg['model']}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / (
+        f"{cfg['dataset_name']}_"
+        f"seed{cfg['seed']}_"
+        f"depth{cfg['depth']}_"
+        f"lambdaa{cfg['lambdaa']}_"
+        f"min_transp{cfg['min_transp']}.pkl")
+    else:
+        output_dir = Path.cwd().parent.parent/'Results'/'HybridDT'/'Benders'/f"{cfg['model']}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / (
+        f"{cfg['dataset_name']}_"
+        f"seed{cfg['seed']}_"
+        f"depth{cfg['depth']}_"
+        f"lambdaa{cfg['lambdaa']}_"
+        f"eta{cfg['eta']}.pkl")
 
     with open(output_file, "wb") as f:
         pickle.dump(results, f)
+
+
 
  
 

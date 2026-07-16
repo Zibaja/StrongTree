@@ -150,7 +150,7 @@ class Dataset():
         return df_X
     
 
-def get_node_status(hybridDT,n):
+def get_node_status(hybridDT,n, b= None, p=None, beta= None):
     '''
     This function give the status of a given node in a tree. By status we mean whether the node
         1- is pruned? i.e., we have made a prediction at one of its ancestors
@@ -170,6 +170,10 @@ def get_node_status(hybridDT,n):
     leaf = 1 iff node n is a leaf in the tree
     value: if node n is a leaf, value represent the prediction at this node
     '''
+
+    b = hybridDT.b
+    p = hybridDT.p
+    beta = hybridDT.beta
     tree = hybridDT.tree
     # mode = grb_model.mode
     pruned = False
@@ -180,14 +184,14 @@ def get_node_status(hybridDT,n):
 
     p_sum = 0
     for m in tree.get_ancestors(n):
-        p_sum = p_sum + hybridDT.p[m]
-    if hybridDT.p[n] > 0.5:  # leaf
+        p_sum = p_sum + p[m]
+    if p[n] > 0.5:  # leaf
         leaf = True
         # if mode == "regression":
         #     value = beta[n, 1]
         # elif mode == "classification":
         for k in hybridDT.labels:
-            if hybridDT.beta[n, k] > 0.5:
+            if beta[n, k] > 0.5:
                 value = k
     elif p_sum == 1:  # Pruned
         pruned = True
@@ -195,7 +199,7 @@ def get_node_status(hybridDT,n):
     if n in tree.Nodes:
         if (pruned == False) and (leaf == False):  # branching
             for f in hybridDT.features:
-                if hybridDT.b[n, f] > 0.5:
+                if b[n, f] > 0.5:
                     selected_feature = f
                     branching = True
 

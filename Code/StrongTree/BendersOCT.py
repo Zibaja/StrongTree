@@ -162,3 +162,5 @@ class BendersOCT:
                 obj.add(-1 * self._lambda * self.b[n, f])
 
         self.model.setObjective(obj, GRB.MAXIMIZE)
+
+

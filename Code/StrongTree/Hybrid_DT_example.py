@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from Tree import Tree
 from Hybrid_utils import *
-from HybridDT import FlowOCT, HybridDT
+from HybridDT import  HybridDT
 import time
 
 
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     start_time = time.time()
     # Define a hybrid model
     bbox = RandomForestClassifier(random_state=random_state, min_samples_split=10, max_depth=10)
-
+    #
     HybridDT_classifier = HybridDT(black_box_classifier=bbox,depth = 3, lambdaa = 0.0001, eta = eta_function(X['train'], 0.0001),min_transp = 0.7,
                                     estimator = 'FlowOCT', verbosity = ['hybrid'], random_state=random_state, bb_pretrained=False )
     
